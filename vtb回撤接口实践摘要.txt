@@ -1,0 +1,96 @@
+vbt_test_01_cookbook.html
+1.vbt.Portfolio.from_signals 会自动清理过滤冲突(比如下一个入场信号触发但资金不满足条件/做多持仓时发生做空信号/已经空仓时发出退场信号等)输入信号序列
+2.vbt.Portfolio.from_orders 要求输入已经过滤和清理的有效信号序列(比如来自 from_signals)
+3.vbt.Portfolio 实例pf提供获取统计常量值(如 pf.annualized_return()/pf.max_dradown())/非时序序列(如 pf.annual_returns())/时序序列(如 pf.asset_flow()/pf.asset_returns())/绘图(如 pf.plots(subplots=...)/pf.plot_xxx)等各类方法
+4.pf.from_signals(log=True) 启用详细的日志追踪订单执行前/中/后各阶段详细数据
+vbt_test_02_cookbook/vbt_test_03_cookbook/vbt_test_04_cookbook
+1.pf.from_signals(close,entries,exits,init_cash=10000,freq='D'),触发入场信号bar[i],入场价=close[i],所有现金建仓仓位[i+1]=cash[i-1]/close[i];触发出场信号bar[j],出场价=close[i],清仓结束本次交易,cash[i+1]恢复到资产价值
+2.pf.from_signals(close,entries,exits,price=open.shift(-1),fees=0.01%,fixed_fees=5,slippage=0.5%,size_type='Percent',size=30%,min_size=100,max_size=1000,init_cash=10000,freq='D'),通过开盘价前移一日,将会使得出入场价格均使用prices在信号日的价格(即下一个开盘价);手续费将影响买卖双边实际利润/损失(实际费用金额=单边总订单成交金额*fees+fixed_fees);滑点将影响实际的成交价(实际买价=price*(1+slippage),实际卖价=price*(1-slippage));size_type(开仓size的数值意义枚举值,Amount:size指资产总数量,Value:size指资产总金额价值,Percent:size指现金百分比,0.3则使用30%的资金开仓entry),开仓entry可用资金需要满足min_size/max_size(二者与size_type无关,均指单个订单的开仓资产数量)数量的需求才会执行订单;对于平仓信号如果accumulate=False(默认值)或触发止盈TakeProfit止损StopLoss则无论size取值如何都是一次性本次订单全部平仓,如果平仓触发时accumulate=True(会对多个连续的开仓信号执行多次开仓,vbt中以平仓事件来统计pnl,因此一个仓位标识记录了多个平仓但只记录了一个初始开仓)且非止盈止损则以当前持仓位基础平仓size大小的仓位(allow_partial=False时则对与订单金额超过现金则直接忽略订单从而不允许部分成交);
+3.pf.from_signals(close,entries,price=open.shift(-1),tp_stop=15%,init_cash=10000,freq='D'),止盈TakeProfit可以不设置平仓exits信号;开仓信号bar[i],开仓价格=price[i]=open[i+1],订单后续直到平仓的都不变的止盈价格=price[i]*(1+tp_stop);如果close[j]>止盈价格则触发平仓信号bar[j],平仓价格=close[j](尽管指定明确指定价格序列price但平仓信号和价格仍然使用close[j]而非open[j+1],无论那个成交价格都与止盈价格大概率差别比较大)
+4.pf.from_signals(close,entries,price=open.shift(-1),high=high,tp_stop=15%,init_cash=10000,freq='D'),指定high序列后,开仓情况不变,但平仓价格和信号都能根据high[j-i]计算使得成交价格都与止盈价格相当接近;
+5.pf.from_signals(close,entries,sl_stop=5%,sl_trail=True,init_cash=10000,freq='D'),追踪止损StopLoss可以不设置平仓exits信号;开仓信号bar[i],开仓价格=price[i]=close[i],订单初始止损价格=price[i]*(1-sl_stop)(如果sl_trail=False则后续直到平仓的都不变的止损价格);持仓过程中随着价格上升而抬高追踪止损价格=trailing_price[i] = max((1 - sl_stop) * price[i],trailing_price[i-1]);如果price[j]<止损价格则触发止损平仓信号bar[j],平仓价格=price[j]=close[j]
+6.pf.from_signals(close,entries,high=high,low=low,sl_stop=5%,sl_trail=True,init_cash=10000,freq='D'),指定high/low序列后,持仓过程中随着high价格上升而抬高追踪止损价格=trailing_price[i] = max((1 - sl_stop) * high[i-1],trailing_price[i-1]);如果low[j]<trailing_price[j]则触发止损平仓信号bar[j]
+vbt_test_02_cookbook
+1.adjust_sl_func_nb/adjust_tp_func_nb 回调函数可以自定义止盈止损参数计算,例如随着利润增厚减少止损幅度或根据atr计算止损等;
+@njit
+def adjust_sl_func_nb_03(c, sl_price: np.ndarray, init_price: np.ndarray, trade_profit: np.ndarray) -> tuple[float, float]:
+    ''' Adjust stop-loss price and trailing behavior dynamically based on current trade profit,收益率增加则收紧止损
+        Note: this version only covers LongOnly-Strategies
+    Args:
+        c:            AdjustSLContext (context for current row/column)
+        sl_price:     array to record the stop-loss price
+        init_price:   array to record the initial entry price
+        trade_profit: array to record the trade-profit
+    Returns:
+        tuple[float, float]: (current stop loss fraction, trailing flag)
+    '''
+    # Current trade profit (fraction, e.g., 0.12 = +12%)
+
+    i = c.i
+    ctp = np.nan
+    if not np.isnan(c.init_price):          # in active trade
+        ctp = (c.val_price_now - c.init_price) / c.init_price
+    # Determine SL and trailing behavior, depending o current trailing behaviour
+    if ctp < 0.10:
+        sl_stop = 0.10
+        sl_trail = False
+    elif ctp <= 0.20:
+        sl_stop = 0.05
+        sl_trail = False
+    else:  # ctp > 0.20
+        sl_stop = 0.05
+        sl_trail = True
+    return sl_stop, sl_trail
+@njit
+def adjust_sl_func_nb_04(c, sl_price: np.ndarray, init_price: np.ndarray, atr: np.ndarray, factor: float) -> tuple[float, bool]:
+    ''' inital Stop-Loss set a init_price - factor * ATR, then trailing
+        LongOnly Strategy,根据atr动态止损
+    Args:
+        c:          AdjustSLContext
+        sl_price:   array to record stop-loss price (for plotting)
+        init_price: array to record entry price
+        atr:        precomputed ATR array
+        factor:     ATR multiplier (float)
+    Returns:
+        (sl_stop, sl_trail)
+    '''
+    i = c.i
+    # New trade entry detected
+    if not np.isnan(c.init_price) and (i == 0 or np.isnan(init_price[i - 1])):
+        # compute fractional stop distance so absolute stop = init_price - factor*ATR
+        sl_stop = (factor * atr[i-1]) / c.init_price   # use bar, where signal was generated
+        sl_trail = True
+        #sl_price[i] = c.init_price - factor * atr[i-1]
+
+    # Ongoing trade: do NOT recompute sl_stop from ATR — keep current
+    elif not np.isnan(c.init_price):
+		#sl_stop = (factor * atr[i-1]) / c.init_price # 不固定atr随atr变动
+        sl_stop = c.curr_stop
+        sl_trail = True
+        #sl_price[i] = max(c.curr_price * (1 - sl_stop), sl_price[i-1])
+    # No active trade
+    else:
+        sl_stop = np.nan
+        sl_trail = False
+    return sl_stop, sl_trail
+
+vbt_test_05_cookbook.html
+1.upon_long_conflict参数指定做多冲突时如何处理订单,默认=Ignore忽略交易,其他枚举值选择某个方向
+2.pf.stats()统计所有标的均值,对于收益等指标可能有意义但对于回撤等指标会有误导,因此可以通过pf[symbol]逐个标的查看统计;pf.wrapper.columns返回各个标的
+3.pf.value()返回每个标的的价值的时序演进数据; pf.value().vbt.plot(...).show()可以直观观察时序;total_value=pf.value().sum(axis=1).vbt.plot可以绘制所有标的的总价值曲线,最终总收益率(total_value.iloc[-1]-total_cash)/total_cash*100
+4.pf.cumulative_returns()返回各个标的的累计收益时序;pf.cumulative_returns().iloc[-1]就是最终数据
+5.pf[symbol].plot_assets()/plot_underwater()可以绘制各个标的资产/回测时序
+6.通过总价值回撤来计算组合总回撤,单纯所有标的的回撤之和或均值没有意义;100*(total_value/total_value.cummax()-1)
+7.cash_sharing=True将多个标的共享现金池,此时pf.value/cash()返回按group统计的资金价值(其他如pf.assets/asset_value()等一些测量通过指定group=False参数或直接访问pf.assets()[symbol]来实现分标的统计);不共享资金时(此时pf.value/cash()返回分标的资金价值)init_cash=False可以指定某种算法来协同pf/close/signals等对标的的引用引从而实现不同的标的分配不同额度
+8.cash_sharing=True且group_by指定为多资产的分组名(分组可能需要一些索引算法来协同pf/close/signals等对标的的引用),此时每个分组使用相同的初始init_cash且组内共享初始资金池(通过算法也可以设置为为每个分组分配不同的初始资金列表);此时如pf.value()等某些统计指标返回按分组名统计数据(pf.value().sum(axis=1)则时所有分组之和);此时pf接口能够返回数据级别可能是标的/分组/组合,可能不同的参数或再聚合实现其他需求;
+# Mapping tickers → group, allocating cash → group 索引算法来协同close/signals/group等对标的的引用对其到pf中的顺序
+mapping = {'GOOG': 'Tech', 'MSFT': 'Tech','MRNA': 'Pharma', 'PFE': 'Pharma'}
+mapping_cash = {'Tech': 6000, 'Pharma': 4000}  # non uniform initial cash
+group_by = pd.Series(mapping)
+init_cash_per_group = pd.Series(mapping_cash)
+# Reorder close/entries/exits according to groups
+new_order = list(mapping.keys())
+new_close = close[new_order]
+new_entries = long_entries[new_order]
+new_exits = long_exits[new_order]
+

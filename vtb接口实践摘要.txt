@@ -1,3 +1,4 @@
+vtb接口实践摘要.txt
 vbt_test_01_cookbook.html
 1.vbt.Portfolio.from_signals 会自动清理过滤冲突(比如下一个入场信号触发但资金不满足条件/做多持仓时发生做空信号/已经空仓时发出退场信号等)输入信号序列
 2.vbt.Portfolio.from_orders 要求输入已经过滤和清理的有效信号序列(比如来自 from_signals)
@@ -82,10 +83,10 @@ vbt_test_05_cookbook.html
 5.pf[symbol].plot_assets()/plot_underwater()可以绘制各个标的资产/回测时序
 6.通过总价值回撤来计算组合总回撤,单纯所有标的的回撤之和或均值没有意义;100*(total_value/total_value.cummax()-1)
 7.cash_sharing=True将多个标的共享现金池,此时pf.value/cash()返回按group统计的资金价值(其他如pf.assets/asset_value()等一些测量通过指定group=False参数或直接访问pf.assets()[symbol]来实现分标的统计);不共享资金时(此时pf.value/cash()返回分标的资金价值)init_cash=False可以指定某种算法来协同pf/close/signals等对标的的引用引从而实现不同的标的分配不同额度
-8.cash_sharing=True且group_by指定为多资产的分组名(分组可能需要一些索引算法来协同pf/close/signals等对标的的引用),此时每个分组使用相同的初始init_cash且组内共享初始资金池(通过算法也可以设置为为每个分组分配不同的初始资金列表);此时如pf.value()等某些统计指标返回按分组名统计数据(pf.value().sum(axis=1)则时所有分组之和);此时pf接口能够返回数据级别可能是标的/分组/组合,可能不同的参数或再聚合实现其他需求;
+8.cash_sharing=True且group_by(设定为True则所有标的作为一组)指定为多资产的分组名(分组可能需要一些索引算法来协同pf/close/signals等对标的的引用),此时每个分组使用相同的初始init_cash且组内共享初始资金池(通过算法也可以设置为为每个分组分配不同的初始资金列表);此时如pf.value()等某些统计指标返回按分组名统计数据(pf.value().sum(axis=1)则时所有分组之和);此时pf接口能够返回数据级别可能是标的/分组/组合,可能不同的参数或再聚合实现其他需求;
 # Mapping tickers → group, allocating cash → group 索引算法来协同close/signals/group等对标的的引用对其到pf中的顺序
 mapping = {'GOOG': 'Tech', 'MSFT': 'Tech','MRNA': 'Pharma', 'PFE': 'Pharma'}
-mapping_cash = {'Tech': 6000, 'Pharma': 4000}  # non uniform initial cash
+mapping_cash = {'Tech': 6000, 'Pharma': 4000} # non uniform initial cash
 group_by = pd.Series(mapping)
 init_cash_per_group = pd.Series(mapping_cash)
 # Reorder close/entries/exits according to groups
@@ -93,4 +94,3 @@ new_order = list(mapping.keys())
 new_close = close[new_order]
 new_entries = long_entries[new_order]
 new_exits = long_exits[new_order]
-
